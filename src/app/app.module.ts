@@ -1,13 +1,15 @@
 import { BrowserModule } from '@angular/platform-browser';
-import {Component, NgModule} from '@angular/core';
+import {Component, Inject, Injectable, NgModule, Optional} from '@angular/core';
+import {APP_BASE_HREF, Location, LocationStrategy, PathLocationStrategy, PlatformLocation} from '@angular/common';
 
 import {setAngularLib, UpgradeModule} from '@angular/upgrade/static';
 import * as angular from 'angular';
 import 'angular-route';
-import {ActivatedRoute, RouterModule, UrlSegment} from '@angular/router';
+import {ActivatedRoute, CanActivate, NavigationError, Router, RouterModule, UrlSegment} from '@angular/router';
 import 'rxjs/add/operator/map';
 import {Observable} from 'rxjs/Observable';
 import {setUpLocationSync} from '@angular/router/upgrade';
+import 'rxjs/add/operator/filter';
 
 // ANGULAR JS APP
 // ------------------
@@ -85,11 +87,61 @@ export function ng1Matcher(url: UrlSegment[]) {
   }
 }
 
+/**
+ * An example of something that causes an error
+ */
+export class Throws {
+  canActivate() {
+    throw new Error('some error');
+  }
+}
+
+/**
+ * We can show some info here or render a fresh button
+ */
+@Component({
+  template: `Some Error`
+})
+export class ErrorComponent {
+  constructor(route: ActivatedRoute, location: Location) {
+    (location as ModifiedLocation).goWithoutNotyfingRouter(route.snapshot.queryParams['targetUrl']);
+  }
+}
+
+@Injectable()
+export class ModifiedLocation extends Location {
+  skip: boolean = false;
+
+  constructor(strategy: LocationStrategy) {
+    super(strategy);
+  }
+
+  subscribe(
+    onNext: (value: any) => void, onThrow?: ((exception: any) => void)|null,
+    onReturn?: (() => void)|null): Object {
+    return super.subscribe((value) => {
+      // don't tell the router about this ULR change to break the vicious cycle!
+      // the router should provide a better way to deal with, but it doesn't
+      if (! this.skip) {
+        onNext(value);
+      }
+      this.skip = false;
+    }, onThrow, onReturn);
+  }
+
+  // set skip = true and then call replaceState
+  goWithoutNotyfingRouter(path: string, query: string = ''): void {
+    this.skip = true;
+    this.go(path, query);
+  }
+}
+
 @NgModule({
   declarations: [
     AppComponent,
     RoutableAngularComponent,
-    EmptyComponent
+    EmptyComponent,
+    ErrorComponent
   ],
   imports: [
     BrowserModule,
@@ -97,7 +149,8 @@ export function ng1Matcher(url: UrlSegment[]) {
     RouterModule.forRoot([
       {path: '', component: RoutableAngularComponent},
       {path: 'a/ng2', component: RoutableAngularComponent},
-      {path: 'b/ng2', component: RoutableAngularComponent},
+      {path: 'b/ng2', component: RoutableAngularComponent, canActivate: [Throws]},
+      {path: 'error', component: ErrorComponent},
       /**
        * Note you can use the '**' instead of a matcher. The '**' route is more forgiving, so everything that
        * works with the matcher, will work with '**' as well.
@@ -121,18 +174,33 @@ export function ng1Matcher(url: UrlSegment[]) {
        */
       // {path: '**', component: EmptyComponent}
       {matcher: ng1Matcher, component: EmptyComponent}
-    ])
+    ], { enableTracing: true })
   ],
-  providers: [],
+  providers: [Throws, {provide: Location, useClass: ModifiedLocation}],
   bootstrap: [AppComponent]
 })
 export class AppModule {
-  constructor(upgrade: UpgradeModule) {
-    // ignore this bit. Since you aren't using UpgradeModule, this is irrelevant.
+  constructor(upgrade: UpgradeModule, router: Router, location: Location) {
     setTimeout(() => {
       setAngularLib(angular);
       upgrade.bootstrap(document.body, ['legacy']);
-      setUpLocationSync(upgrade);
+      const url = document.createElement('a');
+
+      // the following bit is important as well
+      upgrade.$injector.get('$rootScope')
+        .$on('$locationChangeStart', (_: any, next: string, __: string) => {
+          url.href = next;
+          if (! (location as ModifiedLocation).skip) {
+            router.navigateByUrl(url.pathname + url.search + url.hash);
+          }
+        });
+    });
+
+    // listen to all the errors and navigate to a special /error route
+    router.events.filter(e => e instanceof NavigationError).subscribe((e: NavigationError) => {
+      Promise.resolve().then(() => {
+        router.navigate(['/error'], {queryParams: {targetUrl: e.url}, skipLocationChange: true});
+      });
     });
   }
 }
