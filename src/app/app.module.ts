@@ -100,39 +100,13 @@ export class Throws {
  * We can show some info here or render a fresh button
  */
 @Component({
-  template: `Some Error`
+  template: `Some Error <button (click)="refresh()">Refresh</button>`
 })
 export class ErrorComponent {
-  constructor(route: ActivatedRoute, location: Location) {
-    (location as ModifiedLocation).goWithoutNotyfingRouter(route.snapshot.queryParams['targetUrl']);
-  }
-}
+  constructor(private route: ActivatedRoute, private router: Router) {}
 
-@Injectable()
-export class ModifiedLocation extends Location {
-  skip: boolean = false;
-
-  constructor(strategy: LocationStrategy) {
-    super(strategy);
-  }
-
-  subscribe(
-    onNext: (value: any) => void, onThrow?: ((exception: any) => void)|null,
-    onReturn?: (() => void)|null): Object {
-    return super.subscribe((value) => {
-      // don't tell the router about this ULR change to break the vicious cycle!
-      // the router should provide a better way to deal with, but it doesn't
-      if (! this.skip) {
-        onNext(value);
-      }
-      this.skip = false;
-    }, onThrow, onReturn);
-  }
-
-  // set skip = true and then call replaceState
-  goWithoutNotyfingRouter(path: string, query: string = ''): void {
-    this.skip = true;
-    this.go(path, query);
+  refresh(){
+    this.router.navigateByUrl(this.route.snapshot.queryParams['targetUrl']);
   }
 }
 
@@ -176,31 +150,20 @@ export class ModifiedLocation extends Location {
       {matcher: ng1Matcher, component: EmptyComponent}
     ], { enableTracing: true })
   ],
-  providers: [Throws, {provide: Location, useClass: ModifiedLocation}],
+  providers: [Throws],
   bootstrap: [AppComponent]
 })
 export class AppModule {
-  constructor(upgrade: UpgradeModule, router: Router, location: Location) {
+  constructor(upgrade: UpgradeModule, router: Router) {
     setTimeout(() => {
       setAngularLib(angular);
       upgrade.bootstrap(document.body, ['legacy']);
-      const url = document.createElement('a');
-
-      // the following bit is important as well
-      upgrade.$injector.get('$rootScope')
-        .$on('$locationChangeStart', (_: any, next: string, __: string) => {
-          url.href = next;
-          if (! (location as ModifiedLocation).skip) {
-            router.navigateByUrl(url.pathname + url.search + url.hash);
-          }
-        });
+      setUpLocationSync(upgrade);
     });
 
     // listen to all the errors and navigate to a special /error route
     router.events.filter(e => e instanceof NavigationError).subscribe((e: NavigationError) => {
-      Promise.resolve().then(() => {
-        router.navigate(['/error'], {queryParams: {targetUrl: e.url}, skipLocationChange: true});
-      });
+      router.navigate(['/error'], {queryParams: {targetUrl: e.url}});
     });
   }
 }
