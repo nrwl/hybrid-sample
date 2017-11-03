@@ -5,7 +5,10 @@ import {APP_BASE_HREF, Location, LocationStrategy, PathLocationStrategy, Platfor
 import {setAngularLib, UpgradeModule} from '@angular/upgrade/static';
 import * as angular from 'angular';
 import 'angular-route';
-import {ActivatedRoute, CanActivate, NavigationError, Router, RouterModule, UrlSegment} from '@angular/router';
+import {
+  ActivatedRoute, CanActivate, DefaultUrlSerializer, NavigationError, Router, RouterModule,
+  UrlSegment, UrlSegmentGroup, UrlSerializer, UrlTree
+} from '@angular/router';
 import 'rxjs/add/operator/map';
 import {Observable} from 'rxjs/Observable';
 import {setUpLocationSync} from '@angular/router/upgrade';
@@ -63,13 +66,16 @@ export class AppComponent {
       <a routerLink="/b/ng2">ANGULAR B</a>
       <a routerLink="/a/ng1">ANGULARJS A</a>
       <a routerLink="/b/ng1">ANGULARJS B</a>
+      <a [routerLink]="['/a/ng2', {param: 'a/b/c'}]">/a/ng2;param=a/b/c</a>
     </div>
   `
 })
 export class RoutableAngularComponent {
   url: Observable<string> = this.route.url.map(p => p.map(s => s.path).join('/'));
 
-  constructor(private route: ActivatedRoute) {}
+  constructor(private route: ActivatedRoute) {
+    console.log('route params contain slashes', route.snapshot.params);
+  }
 }
 
 @Component({
@@ -88,25 +94,43 @@ export function ng1Matcher(url: UrlSegment[]) {
 }
 
 /**
- * An example of something that causes an error
+ * There is a bug in the AngularJS router that prevents us from matrix parameters
+ * having /. The proper fix is to fix the AngularJS router, but it might take some time.
+ *
+ * This is a temporary workaround:
+ *
+ * * it replaces an escaped slash (%2F) with a __SLASH__
+ * * and then replaced it back.
+ *
+ * So the URL will say http://localhost:4200/a/ng2;param=a__SLASH__b__SLASH__c
+ * but the component will receive: {param: 'a/b/c'}
  */
-export class Throws {
-  canActivate() {
-    throw new Error('some error');
+export class UrlSerializerWithAWorkaroundForAngularJSBug extends DefaultUrlSerializer {
+  parse(str: string): UrlTree {
+    const url = document.createElement('a');
+    url.href = str;
+    let res = url.pathname.replace(new RegExp('__SLASH__', 'g'), '%2F');
+    if (url.search) {
+      res += '?' + url.search;
+    }
+    if (url.hash) {
+      res += '#' + url.hash;
+    }
+    return super.parse(res);
   }
-}
 
-/**
- * We can show some info here or render a fresh button
- */
-@Component({
-  template: `Some Error <button (click)="refresh()">Refresh</button>`
-})
-export class ErrorComponent {
-  constructor(private route: ActivatedRoute, private router: Router) {}
-
-  refresh(){
-    this.router.navigateByUrl(this.route.snapshot.queryParams['targetUrl']);
+  serialize(tree: UrlTree): string {
+    const str = super.serialize(tree);
+    const url = document.createElement('a');
+    url.href = str;
+    let res = url.pathname.replace(new RegExp('%2F', 'g'), '__SLASH__');
+    if (url.search) {
+      res += '?' + url.search;
+    }
+    if (url.hash) {
+      res += '#' + url.hash;
+    }
+    return res;
   }
 }
 
@@ -114,8 +138,7 @@ export class ErrorComponent {
   declarations: [
     AppComponent,
     RoutableAngularComponent,
-    EmptyComponent,
-    ErrorComponent
+    EmptyComponent
   ],
   imports: [
     BrowserModule,
@@ -123,8 +146,7 @@ export class ErrorComponent {
     RouterModule.forRoot([
       {path: '', component: RoutableAngularComponent},
       {path: 'a/ng2', component: RoutableAngularComponent},
-      {path: 'b/ng2', component: RoutableAngularComponent, canActivate: [Throws]},
-      {path: 'error', component: ErrorComponent},
+      {path: 'b/ng2', component: RoutableAngularComponent},
       /**
        * Note you can use the '**' instead of a matcher. The '**' route is more forgiving, so everything that
        * works with the matcher, will work with '**' as well.
@@ -148,9 +170,11 @@ export class ErrorComponent {
        */
       // {path: '**', component: EmptyComponent}
       {matcher: ng1Matcher, component: EmptyComponent}
-    ], { enableTracing: true })
+    ], { enableTracing: false })
   ],
-  providers: [Throws],
+  providers: [
+    {provide: UrlSerializer, useClass: UrlSerializerWithAWorkaroundForAngularJSBug}
+  ],
   bootstrap: [AppComponent]
 })
 export class AppModule {
@@ -159,11 +183,6 @@ export class AppModule {
       setAngularLib(angular);
       upgrade.bootstrap(document.body, ['legacy']);
       setUpLocationSync(upgrade);
-    });
-
-    // listen to all the errors and navigate to a special /error route
-    router.events.filter(e => e instanceof NavigationError).subscribe((e: NavigationError) => {
-      router.navigate(['/error'], {queryParams: {targetUrl: e.url}});
     });
   }
 }
