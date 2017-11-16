@@ -10,6 +10,7 @@ import 'rxjs/add/operator/map';
 import {Observable} from 'rxjs/Observable';
 import {setUpLocationSync} from '@angular/router/upgrade';
 import 'rxjs/add/operator/filter';
+import {init} from 'protractor/built/launcher';
 
 // ANGULAR JS APP
 // ------------------
@@ -181,6 +182,31 @@ export class ModifiedLocation extends Location {
 })
 export class AppModule {
   constructor(upgrade: UpgradeModule, router: Router, location: Location) {
+    /**
+     * The issue is because of the following two properties of the router:
+     * * the router always starts with an empty state and an empty URL
+     * * the router rolls back the URL to the latest stable on error
+     *
+     * If the first navigation fails, the router will reset the URL to the latest stable, which is /.
+     *
+     * This by itself may not be that problematic: you can replace the URL after. In you case, however,
+     * AngularJS picks it up and redirects to a different URL, which results in an error.
+     *
+     * The workaround is to set the initial URL to the location one.
+     *
+     * I think a proper fix would be to make the behavior of resetting the url to the latest stable
+     * customizable.
+     *
+     *
+     * I put a setTimeout into the subscribe below, so you can see that the url in the browser doesn't
+     * change before the "redirect".
+     *
+     * If you comment out the next three lines, it will change to / first and then will change to /error.
+     */
+    const initUrlTree = router.parseUrl(location.path());
+    (<any>router).currentUrlTree = initUrlTree;
+    (<any>router).rawUrlTree = initUrlTree;
+
     setTimeout(() => {
       setAngularLib(angular);
       upgrade.bootstrap(document.body, ['legacy']);
@@ -198,9 +224,9 @@ export class AppModule {
 
     // listen to all the errors and navigate to a special /error route
     router.events.filter(e => e instanceof NavigationError).subscribe((e: NavigationError) => {
-      Promise.resolve().then(() => {
+      setTimeout(() => {
         router.navigate(['/error'], {queryParams: {targetUrl: e.url}, skipLocationChange: true});
-      });
+      }, 5000);
     });
   }
 }
